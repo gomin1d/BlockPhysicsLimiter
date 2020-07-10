@@ -1,0 +1,8 @@
+name: BlockPhysicsLimiter
+main: ua.lokha.blockphysicslimiter.Main
+version: 1.0.0
+commands:
+  blockphysicslimiter:
+    aliases: blockphysicslimiter
+    description: Перезагрузить конфиг плагина.
+    permission: blockphysicslimiter.command
