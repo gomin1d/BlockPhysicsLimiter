@@ -5,8 +5,8 @@
 
 package ua.lokha.blockphysicslimiter;
 
-import it.unimi.dsi.fastutil.longs.Long2IntMap.Entry;
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.server.v1_12_R1.Block;
 import net.minecraft.server.v1_12_R1.ChunkSection;
@@ -23,8 +23,9 @@ import org.bukkit.event.block.BlockPhysicsEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class Main extends JavaPlugin implements Listener {
-    private Long2IntOpenHashMap counter = new Long2IntOpenHashMap();
-    private Long2IntOpenHashMap toLog = new Long2IntOpenHashMap();
+
+    private Long2ObjectOpenHashMap<ChunkUpdateData> counter = new Long2ObjectOpenHashMap<>();
+    private Long2ObjectOpenHashMap<ChunkUpdateData> toLog = new Long2ObjectOpenHashMap<>();
     private int startTick;
     private int radiusChunks;
     private int limit;
@@ -33,8 +34,8 @@ public class Main extends JavaPlugin implements Listener {
     private IBlockData air;
 
     public Main() {
-        this.counter.defaultReturnValue(0);
-        this.toLog.defaultReturnValue(0);
+        this.counter.defaultReturnValue(null);
+        this.toLog.defaultReturnValue(null);
         this.startTick = this.getTick();
         this.air = Block.getById(0).fromLegacyData(0);
     }
@@ -82,23 +83,34 @@ public class Main extends JavaPlugin implements Listener {
         int chunkX = event.getBlock().getX() >> 4;
         int chunkZ = event.getBlock().getZ() >> 4;
         long key = key(chunkX, chunkZ);
-        int count = this.counter.get(key);
-        this.counter.put(key, count + 1);
+
+        ChunkUpdateData data = this.counter.compute(key, (k, mappedValue) -> {
+            if (mappedValue == null) {
+                mappedValue = new ChunkUpdateData(event.getBlock().getWorld().getName(), 0);
+            }
+
+            mappedValue.setUpdatesCount(mappedValue.getUpdatesCount() + 1);
+            return mappedValue;
+        });
+
         int toX = chunkX + this.radiusChunks;
         int toZ = chunkZ + this.radiusChunks;
-        int sumCount = count;
+        int sumCount = data.getUpdatesCount(); // count;
 
         for(int x = chunkX - this.radiusChunks; x <= toX; ++x) {
             for(int z = chunkZ - this.radiusChunks; z <= toZ; ++z) {
                 if (x != chunkX || z != chunkZ) {
-                    sumCount += this.counter.get(key(x, z));
+                    ChunkUpdateData chunkUpdateData = this.counter.get(key(x, z));
+                    if(chunkUpdateData != null) {
+                        sumCount += chunkUpdateData.getUpdatesCount();
+                    }
                 }
             }
         }
 
         if (sumCount >= this.limit) {
             event.setCancelled(true);
-            this.toLog.put(key, sumCount);
+            this.toLog.put(key, new ChunkUpdateData(event.getBlock().getWorld().getName(), sumCount));
             if (sumCount >= this.limitBreakBlock) {
                 this.removeBlock(event.getBlock(), sumCount, this.limit);
             }
@@ -108,19 +120,21 @@ public class Main extends JavaPlugin implements Listener {
 
     private void printTopChunks() {
         try {
-            if (!this.toLog.isEmpty()) {
-                StringBuilder builder = new StringBuilder("Список чанков, которые превысили лимит обновлений блоков за последние " + this.ticks + " тиков:");
-                ObjectIterator iterator = this.toLog.long2IntEntrySet().fastIterator();
-
-                while(iterator.hasNext()) {
-                    Entry next = (Entry)iterator.next();
+            if(!this.toLog.isEmpty()) {
+                StringBuilder topChunks = new StringBuilder("Список чанков, которые превысили лимит обновлений блоков за последние " + this.ticks + " тиков:");
+                ObjectIterator<Long2ObjectMap.Entry<ChunkUpdateData>> iterator = toLog.long2ObjectEntrySet().fastIterator();
+                while (iterator.hasNext()) {
+                    Long2ObjectMap.Entry<ChunkUpdateData> next = iterator.next();
                     long key = next.getLongKey();
                     long x = getX(key);
                     long z = getZ(key);
-                    builder.append("\nChunk X: ").append(x).append(", Chunk Z: ").append(z).append(", Count: ").append(next.getIntValue());
+                    ChunkUpdateData updateData = next.getValue();
+                    topChunks.append("\nWorld: ").append(updateData.getWorldName())
+                            .append(", Chunk X: ").append(x)
+                            .append(", Chunk Z: ").append(z)
+                            .append(", Count: ").append(updateData.getUpdatesCount());
                 }
-
-                this.getLogger().info(builder.toString());
+                this.getLogger().info(topChunks.toString());
             }
         } finally {
             this.toLog.clear();
