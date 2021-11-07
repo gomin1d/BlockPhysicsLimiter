@@ -6,7 +6,6 @@
 package ua.lokha.blockphysicslimiter;
 
 import it.unimi.dsi.fastutil.longs.Long2IntMap.Entry;
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.server.v1_12_R1.Block;
 import net.minecraft.server.v1_12_R1.ChunkSection;
@@ -20,11 +19,14 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockPhysicsEvent;
+import org.bukkit.event.world.WorldUnloadEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class Main extends JavaPlugin implements Listener {
-    private Long2IntOpenHashMap counter = new Long2IntOpenHashMap();
-    private Long2IntOpenHashMap toLog = new Long2IntOpenHashMap();
+    private Map<String, WorldData> worldDataMap = new HashMap<>();
     private int startTick;
     private int radiusChunks;
     private int limit;
@@ -33,8 +35,6 @@ public class Main extends JavaPlugin implements Listener {
     private IBlockData air;
 
     public Main() {
-        this.counter.defaultReturnValue(0);
-        this.toLog.defaultReturnValue(0);
         this.startTick = this.getTick();
         this.air = Block.getById(0).fromLegacyData(0);
     }
@@ -65,6 +65,8 @@ public class Main extends JavaPlugin implements Listener {
             priority = EventPriority.LOW
     )
     public void on(BlockPhysicsEvent event) {
+        String worldName = event.getBlock().getWorld().getName();
+        WorldData worldData = worldDataMap.computeIfAbsent(worldName, WorldData::new);
         int tick = this.getTick();
         if (tick - this.startTick >= this.ticks) {
             this.startTick = tick;
@@ -76,14 +78,16 @@ public class Main extends JavaPlugin implements Listener {
                 var13.printStackTrace();
             }
 
-            this.counter.clear();
+            for (WorldData it : worldDataMap.values()) {
+                it.counter.clear();
+            }
         }
 
         int chunkX = event.getBlock().getX() >> 4;
         int chunkZ = event.getBlock().getZ() >> 4;
         long key = key(chunkX, chunkZ);
-        int count = this.counter.get(key);
-        this.counter.put(key, count + 1);
+        int count = worldData.counter.get(key);
+        worldData.counter.put(key, count + 1);
         int toX = chunkX + this.radiusChunks;
         int toZ = chunkZ + this.radiusChunks;
         int sumCount = count;
@@ -91,14 +95,14 @@ public class Main extends JavaPlugin implements Listener {
         for(int x = chunkX - this.radiusChunks; x <= toX; ++x) {
             for(int z = chunkZ - this.radiusChunks; z <= toZ; ++z) {
                 if (x != chunkX || z != chunkZ) {
-                    sumCount += this.counter.get(key(x, z));
+                    sumCount += worldData.counter.get(key(x, z));
                 }
             }
         }
 
         if (sumCount >= this.limit) {
             event.setCancelled(true);
-            this.toLog.put(key, sumCount);
+            worldData.toLog.put(key, sumCount);
             if (sumCount >= this.limitBreakBlock) {
                 this.removeBlock(event.getBlock(), sumCount, this.limit);
             }
@@ -106,24 +110,34 @@ public class Main extends JavaPlugin implements Listener {
 
     }
 
+    @EventHandler
+    public void on(WorldUnloadEvent event){
+        worldDataMap.remove(event.getWorld().getName());
+    }
+
     private void printTopChunks() {
-        try {
-            if (!this.toLog.isEmpty()) {
-                StringBuilder builder = new StringBuilder("Список чанков, которые превысили лимит обновлений блоков за последние " + this.ticks + " тиков:");
-                ObjectIterator iterator = this.toLog.long2IntEntrySet().fastIterator();
+        for (WorldData worldData : worldDataMap.values()) {
+            try {
+                if (!worldData.toLog.isEmpty()) {
+                    StringBuilder builder = new StringBuilder("[Мир " + worldData.getWorldName() + "] Список чанков, которые превысили лимит обновлений блоков за последние " + this.ticks + " тиков:");
+                    ObjectIterator iterator = worldData.toLog.long2IntEntrySet().fastIterator();
 
-                while(iterator.hasNext()) {
-                    Entry next = (Entry)iterator.next();
-                    long key = next.getLongKey();
-                    long x = getX(key);
-                    long z = getZ(key);
-                    builder.append("\nChunk X: ").append(x).append(", Chunk Z: ").append(z).append(", Count: ").append(next.getIntValue());
+                    while(iterator.hasNext()) {
+                        Entry next = (Entry)iterator.next();
+                        long key = next.getLongKey();
+                        long x = getX(key);
+                        long z = getZ(key);
+                        builder.append("\nChunk X: ").append(x).append(", Chunk Z: ").append(z).append(", Count: ").append(next.getIntValue());
+                    }
+
+                    this.getLogger().info(builder.toString());
                 }
-
-                this.getLogger().info(builder.toString());
+            } catch (Exception e) {
+                this.getLogger().severe("[printTopChunks] Ошибка при обработке мира " + worldData.getWorldName());
+                e.printStackTrace();
+            } finally {
+                worldData.toLog.clear();
             }
-        } finally {
-            this.toLog.clear();
         }
     }
 
